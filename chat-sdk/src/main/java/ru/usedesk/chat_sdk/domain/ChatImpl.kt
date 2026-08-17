@@ -742,6 +742,30 @@ internal class ChatImpl @Inject constructor(
             .mapNotNull { it as? UsedeskMessage }
         val filteredNotSentMessages = notSentMessages.filter { it.id !in ids }
         val needToResendMessages = model.messages.isNotEmpty()
+
+        // dropp DMT-7189: история чата возвращает подтверждённую копию
+        // клиентского сообщения с echo локального id (payload.messageId →
+        // localId в MessageResponseConverter). Если соединение оборвалось до
+        // socket-подтверждения отправки (например, приложение свернули сразу
+        // после send), копия в модели осталась с id == localId — фильтр по id
+        // выше её не матчит, и после reconnect сообщение отображается дважды.
+        // Удаляем из модели неподтверждённые локальные копии, чьи localId
+        // пришли в chatInited-истории (их место занимает серверная копия).
+        val incomingClientLocalIds = filteredMessages
+            .asSequence()
+            .filterIsInstance<UsedeskMessageOwner.Client>()
+            .map(UsedeskMessageOwner.Client::localId)
+            .toSet()
+        if (incomingClientLocalIds.isNotEmpty()) {
+            setModel {
+                copy(messages = messages.filter {
+                    it !is UsedeskMessageOwner.Client ||
+                            it.id != it.localId ||
+                            it.localId !in incomingClientLocalIds
+                })
+            }
+        }
+
         onMessagesNew(new = filteredMessages + filteredNotSentMessages)
 
         when {
