@@ -738,10 +738,6 @@ internal class ChatImpl @Inject constructor(
         val model = modelFlow.value
         val ids = model.messages.map(UsedeskMessage::id)
         val filteredMessages = chatInited.messages.filter { it.id !in ids }
-        val notSentMessages = cachedMessagesRepository.getNotSentMessages()
-            .mapNotNull { it as? UsedeskMessage }
-        val filteredNotSentMessages = notSentMessages.filter { it.id !in ids }
-        val needToResendMessages = model.messages.isNotEmpty()
 
         // dropp DMT-7189: история чата возвращает подтверждённую копию
         // клиентского сообщения с echo локального id (payload.messageId →
@@ -764,7 +760,21 @@ internal class ChatImpl @Inject constructor(
                             it.localId !in incomingClientLocalIds
                 })
             }
+            // Чистим и notSent-кэш: сервер уже подтвердил доставку этих
+            // сообщений историей. Иначе запись с потерянным socket-ack
+            // (SEND_FAILED) на следующем reconnect/cold start вернулась бы в
+            // модель фантомом-дублем, а авто-resend отправил бы сообщение на
+            // сервер повторно.
+            incomingClientLocalIds.forEach {
+                cachedMessagesRepository.removeNotSentMessage(it)
+            }
         }
+
+        val notSentMessages = cachedMessagesRepository.getNotSentMessages()
+            .filter { it.localId !in incomingClientLocalIds }
+            .mapNotNull { it as? UsedeskMessage }
+        val filteredNotSentMessages = notSentMessages.filter { it.id !in ids }
+        val needToResendMessages = model.messages.isNotEmpty()
 
         onMessagesNew(new = filteredMessages + filteredNotSentMessages)
 
