@@ -737,7 +737,13 @@ internal class ChatImpl @Inject constructor(
 
         val model = modelFlow.value
         val ids = model.messages.map(UsedeskMessage::id)
-        val filteredMessages = chatInited.messages.filter { it.id !in ids }
+        // dropp DMT-7189: клиентский файл в истории приходит с id файла, а в
+        // модели (после socket-подтверждения) лежит с id сообщения — фильтр по
+        // id его не матчит, а echo localId история для файлов не отдаёт. Id
+        // сообщения есть в ссылке на файл (ticket_comment_id) — сверяем по нему.
+        val filteredMessages = chatInited.messages.filter {
+            it.id !in ids && fileCommentId(it)?.let(ids::contains) != true
+        }
 
         // dropp DMT-7189: история чата возвращает подтверждённую копию
         // клиентского сообщения с echo локального id (payload.messageId →
@@ -797,6 +803,12 @@ internal class ChatImpl @Inject constructor(
             }
             else -> initedNotSentMessages = notSentMessages
         }
+    }
+
+    private fun fileCommentId(message: UsedeskMessage): String? = when {
+        message is UsedeskMessageOwner.Client && message is UsedeskMessage.File ->
+            COMMENT_ID_REGEX.find(message.file.content)?.groupValues?.get(1)
+        else -> null
     }
 
     inner class EventListener : ChatApi.EventListener {
@@ -912,5 +924,6 @@ internal class ChatImpl @Inject constructor(
         private val ACTIVE_STATUSES = listOf(1, 5, 6, 8)
         private const val REPEAT_DELAY = 5000L
         private const val FIRST_MESSAGE_DELAY = 2000L
+        private val COMMENT_ID_REGEX = Regex("comment_id=(\\d+)")
     }
 }
